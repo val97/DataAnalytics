@@ -7,11 +7,13 @@ Original file is located at
     https://colab.research.google.com/drive/19Jyr0fPFHdaf8W4ghNxG5cqge4MOy3rB
 """
 
+# Commented out IPython magic to ensure Python compatibility.
 import os
 import sys
 import csv
 import pandas as pd
 import matplotlib as plt
+# %matplotlib inline
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
 import seaborn as sns
@@ -128,16 +130,9 @@ categoryDistribution = df.groupby(["label"])["content"].count()
 plt.pyplot.bar(categories, categoryDistribution, width = 0.8, bottom=None, align='center', data=None)
 
 #visualize mean of sentence lenght for each category
-df['number_of_words'] = df.cleaned_text.apply(lambda x: len(x))
-mean_words_for_sentence = df.groupby("label")["number_of_words"].mean()
-plt.pyplot.bar(categories, mean_words_for_sentence, width = 0.8, bottom=None, align='center', data=None)
-
-zero_lenght = df.loc[df.number_of_words == 0]
-zero_lenght
-#remove zero lenght documents?
-
-!sudo pip install imbalanced-learn
-oversample = RandomOverSampler(sampling_strategy='minority')
+df.insert(1, 'number_of_words', df.cleaned_text.apply(lambda x: len(x)))
+median_words_for_sentence = df.groupby("label")["number_of_words"].median()
+plt.pyplot.bar(categories, median_words_for_sentence, width = 0.8, bottom=None, align='center', data=None)
 
 """## Baseline Model """
 
@@ -147,12 +142,16 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.linear_model import SGDClassifier
 from sklearn.pipeline import Pipeline
 
-df['cleaned_text'] = df['cleaned_text'].apply(lambda x: ','.join(map(str, x)))
+df['cleaned_text'] = df['cleaned_text'].apply(lambda x: ', '.join(map(str, x)))
+df['cleaned_text'] = df['cleaned_text'].apply(lambda x: x.replace(",", ""))
 
 ## split dataset
-X = df["cleaned_text"]
-y = df["label"]
+X = df.iloc[:, 0 ]
+y = df.iloc[:, 4 ]
+print(X.shape)
+print(y.shape)
 X_train, X_test, y_train, y_test= model_selection.train_test_split(X, y, test_size=0.3, random_state = 42)
+#y_test = y_test.values.reshape((1045,1))
 
 #categories = ['ADVE','Email','Form','Letter','Memo','News','Note','Report','Resume','Scientific']
 
@@ -164,7 +163,7 @@ def multinomialNBmodel():
   return nb
 def SVMmodel():
   svm = Pipeline([('vectorizer', feature_extraction.text.CountVectorizer()),
-              #  ('tfidf', feature_extraction.text.TfidfTransformer()),
+                ('tfidf', feature_extraction.text.TfidfTransformer()),
                ('clf',  SGDClassifier(penalty='l2', alpha=1e-3, random_state=42)),])
   #nb.fit(X_train, y_train)
   return svm
@@ -216,7 +215,7 @@ def getPerformanceMetrics(model):
   plt.pyplot.show()"""
  
 
-#NOTE: with tfidf there are label that are not predicted
+#NOTE: with MultinomialNB and tfidf there are label that are not predicted
 
 #model = multinomialNBmodel()
 model = SVMmodel()
@@ -224,6 +223,295 @@ model.fit(X_train, y_train)
 
 getPerformanceMetrics(model)
 
-#TO DO: tuning of parameters with searchgrid
+#TO DO: tuning of parameters with searchgrid tfidf(True, False), ngrams
 
-"""## Improvement"""
+"""## Modeling - Word Embeddings
+
+####Create Customized Word Embedding
+"""
+
+from keras.layers import Embedding, Conv1D, MaxPooling1D, Flatten, Dense,LSTM, GRU,Bidirectional,Dropout
+from tensorflow.keras import Input
+from keras.initializers import Constant
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras import layers
+from tensorflow import keras
+import keras.backend as K
+from keras.layers import BatchNormalization
+import tensorflow as tf
+from keras.optimizers import RMSprop
+from keras.callbacks import ModelCheckpoint
+from tensorflow.keras.callbacks import EarlyStopping
+
+from gensim.models import Word2Vec, KeyedVectors
+from collections import defaultdict
+
+def get_most_frequent_word(number_of_word_to_get):
+  sentences = [row.split() for row in df['cleaned_text']] #tokenize sentence
+
+  #create dictionary word_freq(word, number_of_occurence)
+  word_freq = defaultdict(int)
+  for sent in sentences:
+      for i in sent:
+        # print(sent)
+          #print(i)
+          word_freq[i] += 1
+          
+  print("top 10 most frequent words:", sorted(word_freq, key=word_freq.get, reverse=True)[:number_of_word_to_get])
+  #word_freq
+
+get_most_frequent_word(13)
+
+def create_custom_word_embedding():
+    sentences = [row.split() for row in df['cleaned_text']] #tokenize sentence
+    w2v_model = Word2Vec(min_count=100, #min_count: minimum amount of time a word appear in word2vec training corpus  
+                        window=5,  # context window +- center word
+                        size=100,  # dimensions of word embeddings, also refer to size of hidden layer
+                        workers=4)
+                        
+    w2v_model.build_vocab(sentences)
+    w2v_model.train(sentences, total_examples=w2v_model.corpus_count, epochs=w2v_model.iter)
+    w2v_model.init_sims(replace=True)
+    print("vocab length",len(w2v_model.wv.vocab))
+    return  w2v_model
+
+w2v_model = create_custom_word_embedding()
+
+#testing word embedding
+#Find the most similar words for "smoke"
+w2v_model.wv.most_similar(positive=['study'])
+w2v_model.wv.most_similar(positive=['cigarette'])
+
+from sklearn.manifold import TSNE
+def visualize_word2vec_model(model):
+    "Create TSNE model and plot it"
+    labels = []
+    tokens = []
+
+    for word in model.wv.vocab:
+        tokens.append(model[word])
+        labels.append(word)
+    
+    tsne_model = TSNE(perplexity=40, n_components=2, init='pca', n_iter=2500, random_state=23)
+    new_values = tsne_model.fit_transform(tokens)
+
+    x = []
+    y = []
+    for value in new_values:
+        x.append(value[0])
+        y.append(value[1])
+        
+    plt.pyplot.figure(figsize=(18, 18)) 
+    for i in range(len(x)):
+        plt.pyplot.scatter(x[i],y[i])
+        plt.pyplot.annotate(labels[i],
+                     xy=(x[i], y[i]),
+                     xytext=(5, 2),
+                     textcoords='offset points',
+                     ha='right',
+                     va='bottom')
+    plt.pyplot.show()
+
+def save_pretrained_word_embedding(filename, isBin):
+  w2v_model.wv.save_word2vec_format(filename, binary = isBin)
+
+"""#### Modeling Using Custom Word Embedding"""
+
+def inits_params_word_embedding(vocab_len, max_sequence_length, val_split, embedding_dim ):
+  MAX_NB_WORDS = vocab_len
+  MAX_SEQUENCE_LENGTH = max_sequence_length # 800
+  VALIDATION_SPLIT = val_split  #0.2
+  EMBEDDING_DIM = embedding_dim #300 #has to be between 100 and 300
+  
+  return MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM
+
+def data_preparation(MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM):
+  #convert data into vector to fit word embedding:
+    # it means vectorize a text corpus, by turning each text into either a sequence of integers 
+  tokenizer = Tokenizer(nb_words=MAX_NB_WORDS)
+  tokenizer.fit_on_texts(df["cleaned_text"])   #In the case where texts contains lists, we assume each entry of the lists to be a token.
+  sequences = tokenizer.texts_to_sequences(df["cleaned_text"])  #turn each list into a "sequence": is a list of integer word indices. 
+  word_index = tokenizer.word_index
+  print('Found %s unique tokens.' % len(word_index))
+
+  data = pad_sequences(sequences, maxlen=MAX_SEQUENCE_LENGTH) #X
+
+  labels = to_categorical(np.asarray(df["y"])) #y
+  print('Shape of data tensor:', data.shape)
+  print('Shape of label tensor:', labels.shape)
+
+  # split the data into a training set and a validation set
+  
+  #####TODO: can't I do with test_set_split?
+  ######TODO: split data preparation function into data_preparation and train_and_test_split
+
+  indices = np.arange(data.shape[0])
+  np.random.shuffle(indices)
+  data = data[indices]
+  labels = labels[indices]
+  nb_validation_samples = int(VALIDATION_SPLIT * data.shape[0])
+
+  x_train = data[:-nb_validation_samples]
+  y_train = labels[:-nb_validation_samples]
+  x_val = data[-nb_validation_samples:]
+  y_val = labels[-nb_validation_samples:]
+  
+  return word_index, x_train, y_train, x_val, y_val
+
+from tqdm import tqdm
+def load_word_embedding(filename):
+  #extracting vocabs from 'word_embedding.txt'
+  embeddings_index = {}
+  f = open(os.path.join("", filename),encoding='utf-8' )
+  for line in tqdm(f):
+      values = line.rstrip().rsplit(' ')
+      word = values[0]
+      coefs = np.asarray(values[1:], dtype='float32')
+      embeddings_index[word] = coefs
+  f.close()
+  print('Found %s word vectors.' % len(embeddings_index))
+
+  return embeddings_index
+
+#create embedding matrix that join pretrained word embedding with the dataset's vocabulary
+def create_embedding_matrix(embeddings_index, word_index):
+  embedding_matrix = np.zeros((len(word_index) + 1, EMBEDDING_DIM))
+  for word, i in word_index.items():
+      embedding_vector = embeddings_index.get(word)
+      if embedding_vector is not None:
+          # words not found in embedding index will be all-zeros.
+          embedding_matrix[i] = embedding_vector
+  return embedding_matrix
+
+def inits_params_embedding_layer(embedding_matrix, word_index, MAX_SEQUENCE_LENGTH, EMBEDDING_DIM):
+  print("embedding_layer")
+
+  embedding_layer = Embedding(len(word_index) + 1,
+                            EMBEDDING_DIM,
+                            weights=[embedding_matrix],
+                            input_length=MAX_SEQUENCE_LENGTH,
+                            trainable=False)
+  return embedding_layer
+
+def get_f1(y_true, y_pred): #taken from old keras source code
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
+    predicted_positives = K.sum(K.round(K.clip(y_pred, 0, 1)))
+    precision = true_positives / (predicted_positives + K.epsilon())
+    recall = true_positives / (possible_positives + K.epsilon())
+    f1_val = 2*(precision*recall)/(precision+recall+K.epsilon())
+    
+    return f1_val
+
+def run_model(model):
+  model.compile(loss='categorical_crossentropy',
+                optimizer='rmsprop',
+                metrics=[get_f1, "accuracy"])
+  es_callback = EarlyStopping(monitor='val_loss', patience=3)
+  #history = model.fit(x_train, y_train, batch_size=128, epochs=30, validation_data=(x_val, y_val), callbacks=[es_callback], shuffle=False)
+
+
+
+  # happy learning!
+  model.fit(x_train, y_train, validation_data=(x_val, y_val),
+            epochs=20, batch_size=128,  callbacks=[es_callback], shuffle=False)
+
+def define_CNN_model(embedding_layer, MAX_SEQUENCE_LENGTH):
+
+  sequence_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
+  embedded_sequences = embedding_layer(sequence_input)
+  x = Conv1D(128, 5, activation='relu')(embedded_sequences)
+  x = MaxPooling1D(5)(x)
+  x = Conv1D(128, 5, activation='relu')(x)
+  x = MaxPooling1D(5)(x)
+  x = Conv1D(128, 5, activation='relu')(x)
+  x = MaxPooling1D(27)(x)  # global max pooling
+  x = Flatten()(x)
+  x = Dense(128, activation='relu')(x)
+  preds = Dense(10, activation='softmax')(x)
+  
+  model = keras.Model(sequence_input, preds)
+
+  return model
+
+def define_LSTM_model(embedding_layer, MAX_SEQUENCE_LENGTH,  word_index): 
+  sequence_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
+  modelLSTM = keras.Sequential()
+  embedded_sequences = embedding_layer(sequence_input)
+  modelLSTM.add(embedding_layer)
+  modelLSTM.add(Bidirectional(LSTM(units=32, dropout=0.3,recurrent_dropout=0.2)))
+  modelLSTM.add(Dense(32,activation='relu'))
+  modelLSTM.add(Dropout(0.3))
+  modelLSTM.add(Dense(10,activation="softmax"))
+  """  from keras.layers import BatchNormalization
+  import tensorflow as tf
+  model = tf.keras.Sequential()
+  model.add(Embedding(len(word_index) + 1, EMBEDDING_DIM, input_length=MAX_SEQUENCE_LENGTH, weights=[embedding_matrix],trainable=False))
+  model.add(Bidirectional(LSTM(32, return_sequences= True)))
+  model.add(Dense(32,activation='relu'))
+  model.add(Dropout(0.3))
+  model.add(Dense(10 ,activation='softmax'))"""
+  return modelLSTM
+
+w2v_model = create_custom_word_embedding()  
+visualize_word2vec_model(w2v_model)
+save_pretrained_word_embedding("word_embedding.txt", False)
+
+#get dataset info
+max_words_for_sentence = df["number_of_words"].max()
+median_words_for_sentence = df["number_of_words"].median()
+vocab_len = len(w2v_model.wv.vocab)
+print("vocab length: ",len(w2v_model.wv.vocab), "max", max_words_for_sentence)
+
+
+
+MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM = inits_params_word_embedding(len(w2v_model.wv.vocab),max_words_for_sentence, 0.2, 100 )
+word_index, x_train, y_train, x_val, y_val = data_preparation(MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM)
+
+
+
+embeddings_index = load_word_embedding('word_embedding.txt')
+embedding_matrix =create_embedding_matrix(embeddings_index, word_index)
+
+embedding_layer = inits_params_embedding_layer(embedding_matrix, word_index, MAX_SEQUENCE_LENGTH, EMBEDDING_DIM )
+CNNmodel = define_CNN_model(embedding_layer, MAX_SEQUENCE_LENGTH) 
+run_model(CNNmodel)
+
+LSTMmodel = define_LSTM_model(embedding_layer, MAX_SEQUENCE_LENGTH, word_index) 
+LSTMmodel.summary()
+run_model(LSTMmodel)
+
+"""#### Modeling Using Glove Pre-trained Word Embedding"""
+
+import requests, zipfile, io
+def glove_download(): 
+  zip_file_url = "http://nlp.stanford.edu/data/glove.840B.300d.zip"
+  r = requests.get(zip_file_url)
+  z = zipfile.ZipFile(io.BytesIO(r.content))
+  z.extractall()
+
+glove_download()
+embeddings_index = load_word_embedding('glove.840B.300d.txt')
+
+len(embeddings_index)
+
+#TODO: define MAX_NB_WORDS corretly
+MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM = inits_params_word_embedding(len(word_index)+1 ,max_words_for_sentence, 0.2, 300 )
+word_index, x_train, y_train, x_val, y_val = data_preparation(MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM)
+
+embedding_matrix =create_embedding_matrix(embeddings_index, word_index)
+
+modelLstm = define_LSTM_model(embedding_layer, MAX_SEQUENCE_LENGTH, word_index)
+modelLstm.summary()
+
+run_model(modelLstm)
+
+embedding_layer = inits_params_embedding_layer(embedding_matrix, word_index, MAX_SEQUENCE_LENGTH, EMBEDDING_DIM )
+
+modelCnn = define_CNN_model(embedding_layer, MAX_SEQUENCE_LENGTH)
+modelCnn.summary()
+
+run_model(modelCnn)
+
