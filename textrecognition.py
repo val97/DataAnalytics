@@ -146,12 +146,23 @@ df['cleaned_text'] = df['cleaned_text'].apply(lambda x: ', '.join(map(str, x)))
 df['cleaned_text'] = df['cleaned_text'].apply(lambda x: x.replace(",", ""))
 
 ## split dataset
-X = df.iloc[:, 0 ]
-y = df.iloc[:, 4 ]
-print(X.shape)
-print(y.shape)
-X_train, X_test, y_train, y_test= model_selection.train_test_split(X, y, test_size=0.3, random_state = 42)
-#y_test = y_test.values.reshape((1045,1))
+def split_dataset(X, y):
+  #X = df.iloc[:, 0 ]
+ # y = df.iloc[:, 4 ]
+  X_train, X_test, y_train, y_test= model_selection.train_test_split(X, y, test_size=0.3, random_state = 42)
+  X_train, X_val, y_train, y_val = model_selection.train_test_split(X_train, y_train, test_size=0.2, random_state = 42)
+
+  #y_test = y_test.values.reshape((1045,1))
+  return X_train, X_test, y_train, y_test, X_val, y_val
+
+X_train, X_test, y_train, y_test, X_val, y_val = split_dataset(df.iloc[:, 0 ],df.iloc[:, 4 ])
+
+print(X_train.shape)
+print(y_train.shape)
+print(X_test.shape)
+print(y_test.shape)
+print(X_val.shape)
+print(y_val.shape)
 
 #categories = ['ADVE','Email','Form','Letter','Memo','News','Note','Report','Resume','Scientific']
 
@@ -347,18 +358,9 @@ def data_preparation(MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDD
   #####TODO: can't I do with test_set_split?
   ######TODO: split data preparation function into data_preparation and train_and_test_split
 
-  indices = np.arange(data.shape[0])
-  np.random.shuffle(indices)
-  data = data[indices]
-  labels = labels[indices]
-  nb_validation_samples = int(VALIDATION_SPLIT * data.shape[0])
-
-  x_train = data[:-nb_validation_samples]
-  y_train = labels[:-nb_validation_samples]
-  x_val = data[-nb_validation_samples:]
-  y_val = labels[-nb_validation_samples:]
-  
-  return word_index, x_train, y_train, x_val, y_val
+  X_train, X_test, y_train, y_test, x_val, y_val = split_dataset(data, labels)
+    
+  return word_index, X_train, X_test, y_train, y_test, x_val, y_val
 
 from tqdm import tqdm
 def load_word_embedding(filename):
@@ -468,9 +470,9 @@ print("vocab length: ",len(w2v_model.wv.vocab), "max", max_words_for_sentence)
 
 
 MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM = inits_params_word_embedding(len(w2v_model.wv.vocab),max_words_for_sentence, 0.2, 100 )
-word_index, x_train, y_train, x_val, y_val = data_preparation(MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM)
+word_index, x_train, x_test, y_train,y_val, x_val, y_val = data_preparation(MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM)
 
-
+X_train, X_test, y_train, y_test, x_val, y_val
 
 embeddings_index = load_word_embedding('word_embedding.txt')
 embedding_matrix =create_embedding_matrix(embeddings_index, word_index)
@@ -479,18 +481,22 @@ embedding_layer = inits_params_embedding_layer(embedding_matrix, word_index, MAX
 CNNmodel = define_CNN_model(embedding_layer, MAX_SEQUENCE_LENGTH) 
 run_model(CNNmodel)
 
-LSTMmodel = define_LSTM_model(embedding_layer, MAX_SEQUENCE_LENGTH, word_index) 
-LSTMmodel.summary()
-run_model(LSTMmodel)
+#LSTMmodel = define_LSTM_model(embedding_layer, MAX_SEQUENCE_LENGTH, word_index) 
+#LSTMmodel.summary()
+#run_model(LSTMmodel)
 
 """#### Modeling Using Glove Pre-trained Word Embedding"""
 
 import requests, zipfile, io
 def glove_download(): 
-  zip_file_url = "http://nlp.stanford.edu/data/glove.840B.300d.zip"
-  r = requests.get(zip_file_url)
-  z = zipfile.ZipFile(io.BytesIO(r.content))
-  z.extractall()
+  if  not os.path.isfile('./glove.840B.300d.txt'):
+    print("Downloading... ")
+    zip_file_url = "http://nlp.stanford.edu/data/glove.840B.300d.zip"
+    r = requests.get(zip_file_url)
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    z.extractall()
+  else: 
+    print("glove has already been downloaded")
 
 glove_download()
 embeddings_index = load_word_embedding('glove.840B.300d.txt')
@@ -499,7 +505,7 @@ len(embeddings_index)
 
 #TODO: define MAX_NB_WORDS corretly
 MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM = inits_params_word_embedding(len(word_index)+1 ,max_words_for_sentence, 0.2, 300 )
-word_index, x_train, y_train, x_val, y_val = data_preparation(MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM)
+word_index, x_train, x_test, y_train, y_test, x_val, y_val = data_preparation(MAX_NB_WORDS, MAX_SEQUENCE_LENGTH, VALIDATION_SPLIT, EMBEDDING_DIM)
 
 embedding_matrix =create_embedding_matrix(embeddings_index, word_index)
 
@@ -514,4 +520,54 @@ modelCnn = define_CNN_model(embedding_layer, MAX_SEQUENCE_LENGTH)
 modelCnn.summary()
 
 run_model(modelCnn)
+
+
+
+"""####Fine-tuning of BERT Neural Network
+Note: MAX_SEQUENCE_LENGTH = 512 for BERT.
+
+
+"""
+
+!pip install keras-bert
+!pip install keras-rectified-adam
+
+!wget -q https://storage.googleapis.com/bert_models/2018_10_18/uncased_L-12_H-768_A-12.zip
+!unzip -o uncased_L-12_H-768_A-12.zip
+
+from keras_radam import RAdam
+from keras_bert import load_trained_model_from_checkpoint
+
+SEQ_LEN = 128 #MAX_SEQ_LENGTH = SEQ_LEN is a number of lengths of the sequence after tokenizing. It is set to 128. BERT has worked on at max 512 sequence length.
+
+BATCH_SIZE = 50 
+EPOCH= 7 
+LR = 1e-4   #LR is the learning rate.
+
+pretrained_path = 'uncased_L-12_H-768_A-12'
+config_path = os.path.join(pretrained_path, 'bert_config.json')
+checkpoint_path = os.path.join(pretrained_path, 'bert_model.ckpt')
+vocab_path = os.path.join(pretrained_path, 'vocab.txt')
+
+model = load_trained_model_from_checkpoint(
+      config_path,
+      checkpoint_path,
+      training=True,
+      trainable=True,
+      seq_len=SEQ_LEN,
+  )
+
+model.summary()
+
+import codecs
+from keras_bert import Tokenizer
+token_dict = {}
+with codecs.open(vocab_path, 'r', 'utf8') as reader:
+    for line in reader:
+        token = line.strip()
+        token_dict[token] = len(token_dict)
+        
+# print(token_dict)
+
+tokenizer = Tokenizer(token_dict)
 
